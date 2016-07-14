@@ -21,7 +21,7 @@ function scanImage2016Reader(f)
     
     ## Extract the dimensions/number of frames from the SI comment
     framesAcq = parse(comment["frameNumberAcquisition"])
-    nSlices = parse(extracomment["hStackManager.numSlices"])
+    nSlices = parse(extracomment["hFastZ.numFramesPerVolume"])
     nFrames = div(framesAcq,nSlices)
     if nSlices>1
         samplingTime = 1/parse(extracomment["hRoiManager.scanVolumeRate"])     
@@ -29,10 +29,10 @@ function scanImage2016Reader(f)
         samplingTime = parse(extracomment["hRoiManager.scanFramePeriod"])
     end
    
-    img = img[:,:,(1:(nFrames*nSlices))]
+    img = img[:,:,1:(nFrames*nSlices)]
 
     img = reshape(img,(size(img)[1],size(img)[2],nSlices,nFrames))
-   
+    img = img[:,:,1:(nSlices-parse(extracomment["hFastZ.numDiscardFlybackFrames"])),:]
     img = grayim(Image(img))
     img["comment"] = merge(comment,extracomment)
     ## Input the correct properties
