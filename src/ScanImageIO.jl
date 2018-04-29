@@ -14,12 +14,12 @@ function scanImage2016Reader(f;view=false)
     comment = extraprops["comment"]
     comment = split(comment,"\n")[1:end-1]
     comment = [split(str,"= ") for str in comment]
-    comment = [strip(des[1]) => des[2] for des in comment]
+    comment = Dict(strip(des[1]) => des[2] for des in comment)
     
     extracomment =extraprops["tiff:software"]
     extracomment = split(extracomment,"\n")[1:end-1]
     extracomment = [split(replace(replace(str,"'","\""),"SI.",""),"= ") for str in extracomment]
-    extracomment = [strip(des[1]) => des[2] for des in extracomment]
+    extracomment = Dict(strip(des[1]) => des[2] for des in extracomment)
     
     ## Extract the dimensions/number of frames from the SI comment
     framesAcq = parse(comment["frameNumberAcquisition"])
