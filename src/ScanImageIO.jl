@@ -35,7 +35,7 @@ function scanImage2016Reader(f;view=false)
 
     img = reshape(img,(size(img)[1],size(img)[2],nSlices,nFrames))
     img = img[:,:,1:(nSlices-parse(extracomment["hFastZ.numDiscardFlybackFrames"])),:]
-    img = Gray.(img)
+    #img = Gray.(img)
 
     resolutionXY = 2um*eval(parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/parse(extracomment["hRoiManager.pixelsPerLine"])
     resolutionZ = parse(extracomment["hStackManager.stackZStepSize"])um
@@ -77,7 +77,7 @@ function scanImage5Reader(f;view=false,objMag=40)
 
     img = reshape(img,(size(img)[1],size(img)[2],nSlices,nFrames))
     img = img[:,:,1:(nSlices-parse(comment["fastZNumDiscardFrames"])),:]
-    img = Gray.(img)
+    #img = Gray.(img)
     
     resolutionXY = ((tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"])))um
     resolutionZ = (parse(comment["stackZStepSize"])/10)um
