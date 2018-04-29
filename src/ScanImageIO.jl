@@ -9,7 +9,7 @@ function scanImage2016Reader(f;view=false)
     extraprops = magickinfo(f,["comment";"tiff:software"])
 
     ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
-    #img = reinterpret(Int16,img)
+    img = reinterpret(Int16,img)
 
     comment = extraprops["comment"]
     comment = split(comment,"\n")[1:end-1]
@@ -56,7 +56,7 @@ function scanImage5Reader(f;view=false,objMag=40)
     extraprops = magickinfo(f,["comment"])
 
     ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
-    #img = reinterpret(Int16,img)
+    img = reinterpret(Int16,img)
 
     comment = extraprops["comment"]
     comment = split(comment,"\n")[1:end-1]
