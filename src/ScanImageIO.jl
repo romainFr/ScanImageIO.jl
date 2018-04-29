@@ -79,7 +79,7 @@ function scanImage5Reader(f;view=false,objMag=40)
     img = img[:,:,1:(nSlices-parse(comment["fastZNumDiscardFrames"])),:]
     img = Gray.(img)
     
-    resolutionXY = (tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"]))um
+    resolutionXY = ((tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"])))um
     resolutionZ = (parse(comment["stackZStepSize"])/10)um
    
     
