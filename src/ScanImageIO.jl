@@ -9,7 +9,7 @@ function scanImage2016Reader(f;view=false)
     extraprops = magickinfo(f,["comment";"tiff:software"])
 
     ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
-    img = reinterpret(Int16,img)
+    #img = reinterpret(Int16,img)
 
     comment = extraprops["comment"]
     comment = split(comment,"\n")[1:end-1]
@@ -22,7 +22,7 @@ function scanImage2016Reader(f;view=false)
     extracomment = Dict(strip(des[1]) => des[2] for des in extracomment)
     
     ## Extract the dimensions/number of frames from the SI comment
-    framesAcq = parse(comment["frameNumberAcquisition"])
+    framesAcq = size(img,3)#parse(comment["frameNumberAcquisition"])
     nSlices = parse(extracomment["hFastZ.numFramesPerVolume"])
     nFrames = div(framesAcq,nSlices)
     if nSlices>1
