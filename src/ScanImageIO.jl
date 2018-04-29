@@ -50,7 +50,7 @@ function scanImage2016Reader(f;view=false)
     
 end
 
-function scanImage5Reader(f;view=false)
+function scanImage5Reader(f;view=false;objMag=40)
 
     img = load(File(format"TIFF",f),view=view)
     extraprops = magickinfo(f,["comment"])
