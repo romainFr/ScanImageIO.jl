@@ -1,7 +1,5 @@
 module ScanImageIO
-using Images,FileIO, ImageMetadata, ImageAxes, Unitful, ImageMagick
-const um = u"µm"
-const s = u"s"
+using Images,FileIO, ImageMetadata, ImageAxes, ImageMagick
 
 function scanImage2016Reader(f;view=false)
 
@@ -26,9 +24,9 @@ function scanImage2016Reader(f;view=false)
     nSlices = parse(extracomment["hFastZ.numFramesPerVolume"])
     nFrames = div(framesAcq,nSlices)
     if nSlices>1
-        samplingTime = (1/parse(extracomment["hRoiManager.scanVolumeRate"]))s
+        samplingTime = (1/parse(extracomment["hRoiManager.scanVolumeRate"]))
     else
-        samplingTime = parse(extracomment["hRoiManager.scanFramePeriod"])s
+        samplingTime = parse(extracomment["hRoiManager.scanFramePeriod"])
     end
    
     img = img[:,:,1:(nFrames*nSlices)]
@@ -37,13 +35,13 @@ function scanImage2016Reader(f;view=false)
     img = img[:,:,1:(nSlices-parse(extracomment["hFastZ.numDiscardFlybackFrames"])),:]
     #img = Gray.(img)
 
-    resolutionXY = 2um*eval(parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/parse(extracomment["hRoiManager.pixelsPerLine"])
-    resolutionZ = parse(extracomment["hStackManager.stackZStepSize"])um
+    resolutionXY = 2*eval(parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/parse(extracomment["hRoiManager.pixelsPerLine"])
+    resolutionZ = parse(extracomment["hStackManager.stackZStepSize"])
     
-    img = ImageMeta(AxisArray(img,Axis{:x}(range(0um,resolutionXY,size(img)[1])),
-                              Axis{:y}(range(0um,resolutionXY,size(img)[2])),
-                              Axis{:z}(range(0um,resolutionZ,size(img)[3])),
-                              Axis{:time}(range(0s,samplingTime,size(img)[4]))),comment=merge(comment,extracomment))
+    img = ImageMeta(AxisArray(img,Axis{:x}(range(0,resolutionXY,size(img)[1])),
+                              Axis{:y}(range(0,resolutionXY,size(img)[2])),
+                              Axis{:z}(range(0,resolutionZ,size(img)[3])),
+                              Axis{:time}(range(0,samplingTime,size(img)[4]))),comment=merge(comment,extracomment))
   
     
     img
@@ -68,9 +66,9 @@ function scanImage5Reader(f;view=false,objMag=40)
     nSlices = nSlices =  parse(comment["stackNumSlices"])
     nFrames = div(framesAcq,nSlices)
     if nSlices>1
-        samplingTime = samplingTime = parse(comment["fastZPeriod"])s
+        samplingTime = samplingTime = parse(comment["fastZPeriod"])
     else
-        samplingTime = samplingTime = parse(comment["scanFramePeriod"])s
+        samplingTime = samplingTime = parse(comment["scanFramePeriod"])
     end
    
     img = img[:,:,1:(nFrames*nSlices)]
@@ -79,14 +77,14 @@ function scanImage5Reader(f;view=false,objMag=40)
     img = img[:,:,1:(nSlices-parse(comment["fastZNumDiscardFrames"])),:]
     #img = Gray.(img)
     
-    resolutionXY = ((tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"])))um
-    resolutionZ = (parse(comment["stackZStepSize"])/10)um
+    resolutionXY = ((tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"])))
+    resolutionZ = (parse(comment["stackZStepSize"])/10)
    
     
-    img = ImageMeta(AxisArray(img,Axis{:x}(range(0um,resolutionXY,size(img)[1])),
-                              Axis{:y}(range(0um,resolutionXY,size(img)[2])),
-                              Axis{:z}(range(0um,resolutionZ,size(img)[3])),
-                              Axis{:time}(range(0s,samplingTime,size(img)[4]))),comment=comment)
+    img = ImageMeta(AxisArray(img,Axis{:x}(range(0,resolutionXY,size(img)[1])),
+                              Axis{:y}(range(0,resolutionXY,size(img)[2])),
+                              Axis{:z}(range(0,resolutionZ,size(img)[3])),
+                              Axis{:time}(range(0,samplingTime,size(img)[4]))),comment=comment)
   
     
     img
