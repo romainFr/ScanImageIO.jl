@@ -21,7 +21,11 @@ function scanImage2016Reader(f;view=false)
     
     ## Extract the dimensions/number of frames from the SI comment
     framesAcq = size(img,3)#parse(comment["frameNumberAcquisition"])
-    nSlices = parse(extracomment["hFastZ.numFramesPerVolume"])
+    nSlices = 1
+    framesPerVolume = parse(extracomment["hFastZ.numFramesPerVolume"])
+    if typeof(framesPerVolume) !== Expr
+        nSlices = parse(extracomment["hFastZ.numFramesPerVolume"])
+    end
     nFrames = div(framesAcq,nSlices)
     if nSlices>1
         samplingTime = (1/parse(extracomment["hRoiManager.scanVolumeRate"]))
