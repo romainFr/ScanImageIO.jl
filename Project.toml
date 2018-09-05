@@ -1,5 +1,0 @@
-name = "ScanImageIO"
-
-[deps]
-ImageAxes = "2803e5a7-5153-5ecf-9a86-9b4c37f5f5ac"
-ImageMetadata = "bc367c6b-8a6b-528e-b4bd-a4b897500b49"
