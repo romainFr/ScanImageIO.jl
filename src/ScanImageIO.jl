@@ -1,9 +1,9 @@
 module ScanImageIO
-using Images,FileIO, ImageMetadata, ImageAxes, ImageMagick
+using Images,FileIO, ImageMetadata, ImageAxes, ImageMagick, SharedArrays
 
-function scanImage2016Reader(f;view=false)
+function scanImage2016Reader(f;shared=false,mapped=false,binFile="imgFile")
 
-    img = load(File(format"TIFF",f),view=view)
+    img = load(File(format"TIFF",f))
     extraprops = magickinfo(f,["comment";"tiff:software"])
 
     ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
@@ -41,8 +41,15 @@ function scanImage2016Reader(f;view=false)
 
     resolutionXY = 2*eval(parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/parse(extracomment["hRoiManager.pixelsPerLine"])
     resolutionZ = parse(extracomment["hStackManager.stackZStepSize"])
+
+    if (shared & !mapped)
+        out = SharedArray(img)
+    elseif (shared & mapped)
+        out = SharedArray{Int16}(binFile,size(img))
+        out[:] = img
+    end
     
-    img = ImageMeta(AxisArray(img,Axis{:x}(range(0,resolutionXY,size(img)[1])),
+    img = ImageMeta(AxisArray(out,Axis{:x}(range(0,resolutionXY,size(img)[1])),
                               Axis{:y}(range(0,resolutionXY,size(img)[2])),
                               Axis{:z}(range(0,resolutionZ,size(img)[3])),
                               Axis{:time}(range(0,samplingTime,size(img)[4]))),comment=merge(comment,extracomment))
@@ -52,9 +59,9 @@ function scanImage2016Reader(f;view=false)
     
 end
 
-function scanImage5Reader(f;view=false,objMag=40)
+function scanImage5Reader(f;objMag=40,shared=false,mapped=false,binFile="imgFile")
 
-    img = load(File(format"TIFF",f),view=view)
+    img = load(File(format"TIFF",f))
     extraprops = magickinfo(f,["comment"])
 
     ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
@@ -84,6 +91,11 @@ function scanImage5Reader(f;view=false,objMag=40)
     resolutionXY = ((tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"])))
     resolutionZ = (parse(comment["stackZStepSize"])/10)
    
+    if shared
+        img = SharedArray(img)
+    elseif mapped
+        img = SharedArray(binFile,img)
+    end
     
     img = ImageMeta(AxisArray(img,Axis{:x}(range(0,resolutionXY,size(img)[1])),
                               Axis{:y}(range(0,resolutionXY,size(img)[2])),
