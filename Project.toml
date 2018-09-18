@@ -1,0 +1,18 @@
+name = "ScanImageIO"
+uuid = "4fcc971e-bb42-11e8-21a7-8d634879d824"
+authors = ["Romain Franconville <romain.franconville@protonmail.com>"]
+version = "0.1.0"
+
+[deps]
+FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
+ImageAxes = "2803e5a7-5153-5ecf-9a86-9b4c37f5f5ac"
+ImageMagick = "6218d12a-5da1-5696-b52f-db25d2ecc6d1"
+ImageMetadata = "bc367c6b-8a6b-528e-b4bd-a4b897500b49"
+Images = "916415d5-f1e6-5110-898d-aaa5f9f070e0"
+SharedArrays = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
+
+[extras]
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[targets]
+test = ["Test"]
