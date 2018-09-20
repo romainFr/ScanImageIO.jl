@@ -16,9 +16,7 @@ function scanImage2016Reader(files::Array{String,1};binFile="imgFile")
     ## Finding the longest recording and get the frame positions from this one 
     long_run = findmax(nFrames)[2]
     im_pos = read_metadata(files[long_run],read_pos=true)[9]
-
-    im_pos = [im_pos[1:nF] for nF in nFrames]
-    
+ 
     @info "Creating bin file"
     nTotalFrames = sum(nFrames)
     out = SharedArray{Int16}(binFile,(pixelsPerLine,linesPerFrame,realSlices,nTotalFrames))
@@ -27,16 +25,19 @@ function scanImage2016Reader(files::Array{String,1};binFile="imgFile")
     startPoints = vcat(1,cumsum(nFrames*im_length)[1:end-1].-1)
 
     frame_length = pixelsPerLine * linesPerFrame
+
+    pos_idx = [vcat([i:(i+realSlices-1) for i in 1:nSlices:nF]...) for nF in nFrames]
+    im_pos = [im_pos[pI] for pI in pos_idx]
+    
     #procsToUse = Distributed.WorkerPool(collect(1:min(max_loads,length(files))))
 
     #files_split = [round(Int,s) for s in range(0,stop=length(files),length=nchunks+1)]
     #for j in 1:nchunks
     # REDO indexing if more files than proc
-    pro = procs(out)
+
     @sync begin
-        for i in 1:length(files)
-            p = pro[i]
-            @async remotecall_wait(writeim_toshared_native, p, out,files[i],nFrames[i],nSlices,startPoints[i],realSlices,im_pos[i],frame_length)
+        for p in procs(out)          
+            @async remotecall_wait(writeim_toshared_native_chunk, p, out,files,startPoints,im_pos,frame_length)
             #pmap(procsToUse,1:length(files)) do i    
         end
     end
@@ -141,16 +142,24 @@ function writeim_toshared(out,files,file_split,nFrames,nSlices,startPoints,realS
     out
 end
 
-function writeim_toshared_native(out,file,nFrames,nSlices,startPoint,realSlices,im_pos,imlength)
+function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength)
+   writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,myrange(out,[0,length(files)]))
+   
+end
+
+function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,filerange)
+    for i in filerange
+        writeim_toshared_native(out,files[i],startPoints[i],im_pos[i],imlength)
+    end
+end
+
+function writeim_toshared_native(out,file,startPoint,im_pos,imlength)
    
     fi = open(file)
-    for fr in 1:nFrames
-        for sl in 1:realSlices
-            frame = (fr-1)*nSlices+sl
-            seek(fi,im_pos[frame])
-            out[startPoint:(startPoint+imlength-1)] = [read(fi,Int16) for j in 1:imlength]
-            startPoint+=imlength
-        end
+    for fr in 1:length(im_pos)
+        seek(fi,im_pos[fr])
+        out[startPoint:(startPoint+imlength-1)] = [read(fi,Int16) for j in 1:imlength]
+        startPoint+=imlength
     end
     close(fi)
     @info "Loaded file $(file)"
