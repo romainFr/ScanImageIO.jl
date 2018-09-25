@@ -1,12 +1,14 @@
 module ScanImageIO
 using Images,FileIO, ImageMetadata, ImageAxes, ImageMagick, SharedArrays, Distributed
 
-function scanImage2016Reader(files::Array{String,1};binFile="imgFile")
+function scanImage2016Reader(files::Array{String,1};binFile=nothing)
 
-    ## TO DO : READ THE HEADER WITHOUT READING THE FULL DATA
+    
     @info "Reading metadata"
     (pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realSlices) = read_metadata(files[1],read_pos=false)
-   
+
+    nFrames = [nFrames]
+    
     for f in files[2:end]
         tempMetadata = read_metadata(f,read_pos=false)
         @assert tempMetadata[[1:3;5:7]] == (pixelsPerLine,linesPerFrame,nSlices,resolutionXY,resolutionZ,samplingTime) "Images do not have the same size"
@@ -17,31 +19,30 @@ function scanImage2016Reader(files::Array{String,1};binFile="imgFile")
     long_run = findmax(nFrames)[2]
     im_pos = read_metadata(files[long_run],read_pos=true)[9]
  
-    @info "Creating bin file"
     nTotalFrames = sum(nFrames)
-    out = SharedArray{Int16}(binFile,(pixelsPerLine,linesPerFrame,realSlices,nTotalFrames))
+    if binFile == nothing
+        @info "Creating shared Array"
+        out = SharedArray{Int16}((pixelsPerLine,linesPerFrame,realSlices,nTotalFrames))
+    else
+        binFile = abspath(binFile)
+        @info "Creating bin file $(binFile)"
+        out = SharedArray{Int16}(binFile,(pixelsPerLine,linesPerFrame,realSlices,nTotalFrames))
+    end
 
     im_length = pixelsPerLine * linesPerFrame * realSlices
     startPoints = vcat(1,cumsum(nFrames*im_length)[1:end-1].-1)
-
+    
     frame_length = pixelsPerLine * linesPerFrame
 
     pos_idx = [vcat([i:(i+realSlices-1) for i in 1:nSlices:nF]...) for nF in nFrames]
     im_pos = [im_pos[pI] for pI in pos_idx]
     
-    #procsToUse = Distributed.WorkerPool(collect(1:min(max_loads,length(files))))
-
-    #files_split = [round(Int,s) for s in range(0,stop=length(files),length=nchunks+1)]
-    #for j in 1:nchunks
-    # REDO indexing if more files than proc
-
     @sync begin
         for p in procs(out)          
             @async remotecall_wait(writeim_toshared_native_chunk, p, out,files,startPoints,im_pos,frame_length)
-            #pmap(procsToUse,1:length(files)) do i    
         end
     end
-    #end
+ 
     ## Returning the SharedArray and a dict of metadata
     (out,Dict("framesPerTrial" => nFrames,"resolutionXY"=>resolutionXY,"resolutionZ"=>resolutionZ,"samplingTime"=>samplingTime))
     
@@ -51,6 +52,49 @@ end
 function read_metadata(f::String;read_pos=true)
     ## WIP. Just reads the main metadata for now. TOD : MROI situations etc...
     fi = open(f)
+
+    (ifd_header_pos,nv_frame_data_length,roi_group_data_length) = read_SI_header(fi)
+   
+    extracomment = read_SI_meta(fi,nv_frame_data_length)  
+
+    if read_pos
+        ## Collecting where the frames are and their length
+        img_pos = []
+        while ifd_header_pos != 0
+            img_pos_temp,ifd_header_pos = read_ifd_header(fi,ifd_header_pos)
+            img_pos = vcat(img_pos,img_pos_temp)
+        end
+    end
+
+    close(fi)
+    
+    improps = extract_image_properties(extracomment)
+    
+    if read_pos
+        return (improps...,img_pos)
+    else
+        return improps
+    end
+end
+
+function read_ifd_header(fi,ifd_header_pos)
+    seek(fi,ifd_header_pos)
+    n_ifd = read(fi,Int)
+            
+    ## Skip to the image location field
+    skip(fi,20*6)
+    
+    @assert read(fi,Int16) == 273 "Failed to find strip offset field"
+    skip(fi,10)
+    img_pos = read(fi,Int)
+    
+    ## Finding the next frame
+    skip(fi,20*11)
+    ifd_header_pos = read(fi,Int)
+    return (img_pos,ifd_header_pos)
+end
+
+function read_SI_header(fi)
     seek(fi,8)
     ifd_header_pos = read(fi,Int)
 
@@ -60,42 +104,26 @@ function read_metadata(f::String;read_pos=true)
     nv_frame_data_length = read(fi,Int32)
 
     roi_group_data_length = read(fi,Int32)
+    return (ifd_header_pos,nv_frame_data_length,roi_group_data_length) 
+end
 
-    nv_frame_data = String(read(fi,nv_frame_data_length))
+function read_SI_meta(fi,header_length)
+    parse_SI_meta(String(read(fi,header_length)))
+end
 
-    if read_pos
-        ## Collecting where the frames are and their length
-        img_pos = []
-  
-        while ifd_header_pos != 0
-            ## Go to the first IFD header
-            seek(fi,ifd_header_pos)
-            n_ifd = read(fi,Int)
-            
-            ## Skip to the image location field
-            skip(fi,20*6)
-            
-            @assert read(fi,Int16) == 273 "Failed to find strip offset field"
-            skip(fi,10)
-            img_pos = vcat(img_pos,read(fi,Int))
-        
-            ## Finding the next frame
-            skip(fi,20*11)
-            ifd_header_pos = read(fi,Int)
-        end
-    end
-    
-    extracomment = nv_frame_data
+function parse_SI_meta(extracomment)
     extracomment = split(extracomment,"\n")[1:end-1]
     extracomment = [split(replace(replace(str,"'"=>"\""),"SI."=>""),"= ") for str in extracomment]
     extracomment = Dict(strip(des[1]) => des[2] for des in extracomment)
-    
+end
+
+function extract_image_properties(extracomment)
     framesPerVolume = Meta.parse(extracomment["hFastZ.numFramesPerVolume"])
     if typeof(framesPerVolume) !== Expr
         nSlices = Meta.parse(extracomment["hFastZ.numFramesPerVolume"])
         nFrames = Meta.parse(extracomment["hFastZ.numVolumes"])
         samplingTime = (1/Meta.parse(extracomment["hRoiManager.scanVolumeRate"]))
-        else
+    else
         nFrames = Meta.parse(extracomment["hStackManager.framesPerSlice"])
         nSlices = 1
         samplingTime = Meta.parse(extracomment["hRoiManager.scanFramePeriod"])
@@ -107,12 +135,7 @@ function read_metadata(f::String;read_pos=true)
     resolutionXY = 2*eval(Meta.parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/Meta.parse(extracomment["hRoiManager.pixelsPerLine"])
     resolutionZ = Meta.parse(extracomment["hStackManager.stackZStepSize"])
 
-    close(fi)
-    if read_pos
-        return (pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realNSlices,img_pos)
-    else
-        return (pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realNSlices)
-    end
+    return (pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realNSlices)
 end
 
 function myrange(q::SharedArray,bigrange)
@@ -123,23 +146,6 @@ function myrange(q::SharedArray,bigrange)
     nchunks = length(procs(q))
     splits = [round(Int, s) for s in range(bigrange[1],stop=bigrange[2],length=nchunks+1)]
     splits[idx]+1:splits[idx+1]
-end
-
-function writeim_toshared(out,files,file_split,nFrames,nSlices,startPoints,realSlices)
-    filerange = myrange(out,file_split)
-    for i in filerange
-        img = load(File(format"TIFF",files[i]))
-        
-        ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
-        img = reinterpret(Int16,img)
-        img = img[:,:,1:(nFrames[i]*nSlices)]
-        
-        img = reshape(img,(size(img)[1],size(img)[2],nSlices,nFrames[i]))
-        img = img[:,:,1:realSlices,:]
-        out[:,:,:,startPoints[i]:(startPoints[i]+nFrames[i]-1)] = img
-        @info "Loaded trial $i"
-        end
-    out
 end
 
 function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength)
@@ -154,75 +160,46 @@ function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,fil
 end
 
 function writeim_toshared_native(out,file,startPoint,im_pos,imlength)
-   
-    fi = open(file)
-    for fr in 1:length(im_pos)
-        seek(fi,im_pos[fr])
-        out[startPoint:(startPoint+imlength-1)] = [read(fi,Int16) for j in 1:imlength]
-        startPoint+=imlength
+
+    imsz = (size(out,2),size(out,1))
+    
+    try
+        fi = open(file)
+        sP = startPoint
+        for fr in 1:length(im_pos)
+            seek(fi,im_pos[fr])
+            out[sP:(sP+imlength-1)] = permutedims(reshape([read(fi,Int16) for j in 1:imlength],imsz),(2,1))
+            sP+=imlength
+        end
+        @info "Loaded file $(file)"
+        close(fi)
+        return out
+    catch
+        @info "Need to read the image positions for file $(file)"
+        metad = read_metadata(file,read_pos=true)
+        realSlices = metad[8]
+        im_pos = metad[9]
+        nSlices = metad[3]
+        nFrames =metad[4]
+        pos_idx = vcat([i:(i+realSlices-1) for i in 1:nSlices:nFrames]...)
+        im_pos = im_pos[pos_idx]
+        fi = open(file)
+        for fr in 1:length(im_pos)
+            seek(fi,im_pos[fr])
+            out[startPoint:(startPoint+imlength-1)] = permutedims(reshape([read(fi,Int16) for j in 1:imlength],imsz),(2,1))
+            startPoint+=imlength
+        end
+        @info "Loaded file $(file)"
+        close(fi)
+        return out
     end
-    close(fi)
-    @info "Loaded file $(file)"
-    out
+   
+   
 end
 
-
-function scanImage2016Reader(f::String;shared=false,mapped=false,binFile="imgFile")
-
-    img = load(File(format"TIFF",f))
-    extraprops = magickinfo(f,["comment";"tiff:software"])
-
-    ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
-    img = reinterpret(Int16,img)
-
-    comment = extraprops["comment"]
-    comment = split(comment,"\n")[1:end-1]
-    comment = [split(str,"= ") for str in comment]
-    comment = Dict(strip(des[1]) => des[2] for des in comment)
-    
-    extracomment =extraprops["tiff:software"]
-    extracomment = split(extracomment,"\n")[1:end-1]
-    extracomment = [split(replace(replace(str,"'","\""),"SI.",""),"= ") for str in extracomment]
-    extracomment = Dict(strip(des[1]) => des[2] for des in extracomment)
-    
-    ## Extract the dimensions/number of frames from the SI comment
-    framesAcq = size(img,3)#parse(comment["frameNumberAcquisition"])
-    nSlices = 1
-    framesPerVolume = parse(extracomment["hFastZ.numFramesPerVolume"])
-    if typeof(framesPerVolume) !== Expr
-        nSlices = parse(extracomment["hFastZ.numFramesPerVolume"])
-    end
-    nFrames = div(framesAcq,nSlices)
-    if nSlices>1
-        samplingTime = (1/parse(extracomment["hRoiManager.scanVolumeRate"]))
-    else
-        samplingTime = parse(extracomment["hRoiManager.scanFramePeriod"])
-    end
-   
-    img = img[:,:,1:(nFrames*nSlices)]
-
-    img = reshape(img,(size(img)[1],size(img)[2],nSlices,nFrames))
-    img = img[:,:,1:(nSlices-parse(extracomment["hFastZ.numDiscardFlybackFrames"])),:]
-    #img = Gray.(img)
-
-    resolutionXY = 2*eval(parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/parse(extracomment["hRoiManager.pixelsPerLine"])
-    resolutionZ = parse(extracomment["hStackManager.stackZStepSize"])
-
-    if (shared & !mapped)
-        out = SharedArray(img)
-    elseif (shared & mapped)
-        out = SharedArray{Int16}(binFile,size(img))
-        out[:] = img
-    end
-    
-    img = ImageMeta(AxisArray(out,Axis{:x}(range(0,resolutionXY,size(img)[1])),
-                              Axis{:y}(range(0,resolutionXY,size(img)[2])),
-                              Axis{:z}(range(0,resolutionZ,size(img)[3])),
-                              Axis{:time}(range(0,samplingTime,size(img)[4]))),comment=merge(comment,extracomment))
-  
-    
-    img
-    
+## Reads a single file.
+function scanImage2016Reader(file::String;binFile=nothing)
+    scanImage2016Reader([file];binFile=binFile)
 end
 
 function scanImage5Reader(f;objMag=40,shared=false,mapped=false,binFile="imgFile")
