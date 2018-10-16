@@ -22,11 +22,11 @@ function scanImage2016Reader(files::Array{String,1};binFile=nothing)
     nTotalFrames = sum(nFrames)
     if binFile == nothing
         @info "Creating shared Array"
-        out = SharedArray{Int16}((pixelsPerLine,linesPerFrame,realSlices,nTotalFrames))
+        out = SharedArray{Int16}((linesPerFrame,pixelsPerLine,realSlices,nTotalFrames))
     else
         binFile = abspath(binFile)
         @info "Creating bin file $(binFile)"
-        out = SharedArray{Int16}(binFile,(pixelsPerLine,linesPerFrame,realSlices,nTotalFrames))
+        out = SharedArray{Int16}(binFile,(linesPerFrame,pixelsPerLine,realSlices,nTotalFrames))
     end
 
     im_length = pixelsPerLine * linesPerFrame * realSlices
@@ -34,7 +34,7 @@ function scanImage2016Reader(files::Array{String,1};binFile=nothing)
     
     frame_length = pixelsPerLine * linesPerFrame
 
-    pos_idx = [vcat([i:(i+realSlices-1) for i in 1:nSlices:nF]...) for nF in nFrames]
+    pos_idx = [vcat([i:(i+realSlices-1) for i in 1:nSlices:nF]...) for nF in nFrames*nSlices]
     im_pos = [im_pos[pI] for pI in pos_idx]
     
     @sync begin
