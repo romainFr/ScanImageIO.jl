@@ -66,7 +66,6 @@ function scanImage2016Reader(files::Array{String,1};binFile=nothing)
     end
 
     im_length = pixelsPerLine * linesPerFrame * realSlices
-    startPoints = vcat(1,cumsum(nFrames*im_length)[1:end-1].-1)
     
     frame_length = pixelsPerLine * linesPerFrame
 
@@ -84,6 +83,12 @@ function scanImage2016Reader(files::Array{String,1};binFile=nothing)
     
 end
 
+function read_movie(f::String)
+    sz,data,metadata = ScanImageTiffReader.open(f) do io
+        size(io),data(io),parse_SI_meta(metadata(io))
+    end
+    
+end
 
 function read_metadata(f::String;read_pos=true)
     ## WIP. Just reads the main metadata for now. TOD : MROI situations etc...
