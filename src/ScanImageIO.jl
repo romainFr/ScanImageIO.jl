@@ -1,48 +1,12 @@
 module ScanImageIO
-using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
+using Images,FileIO, ImageMetadata, ImageAxes, ImageMagick, SharedArrays, Distributed
 
-## Reading the metadata header as a Dictionary
-function makeLineDict(metaLine)
-    metaLine = split(metaLine,"= ")
-    metaNames = String.(strip.(split(metaLine[1],".")))
-    d = Dict(metaNames[end] => parseSIField(metaLine[2]))
-    for i in (length(metaNames)-1):-1:1
-        d = Dict(metaNames[i] => d)
-    end
-    d
-end
-
-function recursiveMerge(dicts...)
-    merge(recursiveMerge,dicts...)
-end
-
-function parseSIField(input)
-    input = replace(input,"'"=>"")
-    out  = try
-        eval(Meta.parse(input))
-    catch
-        input
-    end
-    out
-end
-
-function parse_SI_meta(meta)
-    jsonStart = findfirst("{\n",meta)[1]
-    rois = JSON.parse(meta[jsonStart:end-1])
-    metaP = split(meta[1:(jsonStart-3)],"\n")
-    metaP = recursiveMerge([makeLineDict(mL) for mL in metaP]...)
-    merge(metaP,rois)
-end
-
-## Loads a series of scanImage files, possibly into a binary file (via SharedArrays)
 function scanImage2016Reader(files::Array{String,1};binFile=nothing)
 
     
     @info "Reading metadata"
-    #(pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realSlices) = read_metadata(files[1],read_pos=false)
+    (pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realSlices) = read_metadata(files[1],read_pos=false)
 
-
-    
     nFrames = [nFrames]
     
     for f in files[2:end]
@@ -147,7 +111,11 @@ function read_SI_meta(fi,header_length)
     parse_SI_meta(String(read(fi,header_length)))
 end
 
-
+function parse_SI_meta(extracomment)
+    extracomment = split(extracomment,"\n")[1:end-1]
+    extracomment = [split(replace(replace(str,"'"=>"\""),"SI."=>""),"= ") for str in extracomment]
+    extracomment = Dict(strip(des[1]) => des[2] for des in extracomment)
+end
 
 function extract_image_properties(extracomment)
     framesPerVolume = Meta.parse(extracomment["hFastZ.numFramesPerVolume"])
