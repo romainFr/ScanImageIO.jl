@@ -7,7 +7,7 @@ version = "0.1.0"
 Distributed = "8ba89e20-285c-5b6f-9357-94700520ee1b"
 FileIO = "5789e2e9-d7fb-5bc7-8068-2c6fae9b9549"
 JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
-ScanImageTiffReader = "2aa152d0-c912-11e8-1241-a988e280d624"
+ScanImageTiffReader = "3d38dfc6-4f17-513e-996d-152e5e70789c"
 SharedArrays = "1a1011a3-84de-559e-8e89-a11a2f7dc383"
 
 [extras]
