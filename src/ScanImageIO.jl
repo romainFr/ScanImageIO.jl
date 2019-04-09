@@ -1,39 +1,6 @@
 module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 
-## Reading the metadata header as a Dictionary
-function makeLineDict(metaLine)
-    metaLine = split(metaLine,"= ")
-    metaNames = String.(strip.(split(metaLine[1],".")))
-    d = Dict(metaNames[end] => parseSIField(metaLine[2]))
-    for i in (length(metaNames)-1):-1:1
-        d = Dict(metaNames[i] => d)
-    end
-    d
-end
-
-function recursiveMerge(dicts...)
-    merge(recursiveMerge,dicts...)
-end
-
-function parseSIField(input)
-    input = replace(input,"'"=>"")
-    out  = try
-        eval(Meta.parse(input))
-    catch
-        input
-    end
-    out
-end
-
-function parse_SI_meta(meta)
-    jsonStart = findfirst("{\n",meta)[1]
-    rois = JSON.parse(meta[jsonStart:end-1])
-    metaP = split(meta[1:(jsonStart-3)],"\n")
-    metaP = recursiveMerge([makeLineDict(mL) for mL in metaP]...)
-    merge(metaP,rois)
-end
-
 ## Loads a series of scanImage files, possibly into a binary file (via SharedArrays)
 function scanImage2016Reader(files::Array{String,1};binFile=nothing)
 
@@ -83,96 +50,62 @@ function scanImage2016Reader(files::Array{String,1};binFile=nothing)
     
 end
 
-function read_movie(f::String)
-    sz,data,metadata = ScanImageTiffReader.open(f) do io
-        size(io),data(io),parse_SI_meta(metadata(io))
+function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
+    px,sz,data,metadata = ScanImageTiffReader.open(f) do io
+        ScanImageTiffReader.pxtype(io),ScanImageTiffReader.size(io),ScanImageTiffReader.data(io),json ? JSON.parse(ScanImageTiffReader.metadata(io)) : parse_SI_meta(ScanImageTiffReader.metadata(io))
+    end 
+
+    fullDims = 6
+    channelsAvailable = metadata["SI"]["hChannels"]["channelSave"]
+    nChannels = length(channelsAvailable)
+    nFrames = metadata["SI"]["hStackManager"]["framesPerSlice"]
+    nRealSlices = metadata["SI"]["hStackManager"]["numSlices"]
+    if metadata["SI"]["hFastZ"]["hasFastZ"] == 1
+        nAcquiredSlices = metadata["SI"]["hFastZ"]["numFramesPerVolume"]
+        nVolumes = metadata["SI"]["hFastZ"]["numVolumes"]
+    else
+        nAcquiredSlices = nRealSlices
+        nVolumes = 1
     end
-    
-end
 
-function read_metadata(f::String;read_pos=true)
-    ## WIP. Just reads the main metadata for now. TOD : MROI situations etc...
-    fi = open(f)
-
-    (ifd_header_pos,nv_frame_data_length,roi_group_data_length) = read_SI_header(fi)
-   
-    extracomment = read_SI_meta(fi,nv_frame_data_length)  
-
-    if read_pos
-        ## Collecting where the frames are and their length
-        img_pos = []
-        while ifd_header_pos != 0
-            img_pos_temp,ifd_header_pos = read_ifd_header(fi,ifd_header_pos)
-            img_pos = vcat(img_pos,img_pos_temp)
+    if nVolumes == 1
+        fullDims =5
+        if nRealSlices == 1
+            fullDims = 4
         end
     end
 
-    close(fi)
-    
-    improps = extract_image_properties(extracomment)
-    
-    if read_pos
-        return (improps...,img_pos)
+    channels = isnothing(channels) ? (1:nChannels) : channels
+    frames = isnothing(frames) ? (1:nFrames) : frames
+    slices = isnothing(slices) ? (1:nRealSlices) : slices
+    volumes = isnothing(volumes) ? (1:nVolumes) : volumes
+
+    data = reshape(data,(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
+    data = permutedims(data,(2,1,3,4,5,6))
+
+    if metadata["SI"]["hRoiManager"]["mroiEnable"] == 1
+        nRois = length(metadata["RoiGroups"]["imagingRoiGroup"]["rois"])
+        linesBetweenScanFields = round(metadata["SI"]["hScan2D"]["flytoTimePerScanfield"]/metadata["SI"]["hRoiManager"]["linePeriod"])
+        roiLines = [metadata["RoiGroups"]["imagingRoiGroup"]["rois"][i]["scanfields"]["pixelResolutionXY"][2] for i in 1:nRois]
+        lineOffset = 1
+        roisPos = Array{Array{Int64,1},1}(undef,nRois)
+        rois = isnothing(rois) ? (1:nRois) : rois
+        out = Array{Any,1}(undef,length(rois))
+        for i in 1:nRois
+            roisPos[i] = lineOffset:(lineOffset+roiLines[i]-1)
+            lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
+        end
+        i = 1
+        for r in rois
+            out[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+            out[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
+            i += 1
+        end
     else
-        return improps
+        out = SharedArray{px}((sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+        out[:] = data[:,:,channels,frames,slices,volumes]
     end
-end
-
-function read_ifd_header(fi,ifd_header_pos)
-    seek(fi,ifd_header_pos)
-    n_ifd = read(fi,Int)
-            
-    ## Skip to the image location field
-    skip(fi,20*6)
-    
-    @assert read(fi,Int16) == 273 "Failed to find strip offset field"
-    skip(fi,10)
-    img_pos = read(fi,Int)
-    
-    ## Finding the next frame
-    skip(fi,20*11)
-    ifd_header_pos = read(fi,Int)
-    return (img_pos,ifd_header_pos)
-end
-
-function read_SI_header(fi)
-    seek(fi,8)
-    ifd_header_pos = read(fi,Int)
-
-    @assert read(fi,Int32) == 117637889 "Not a scanimage file" 
-    @info "ScanImage TIFF version $(read(fi,Int32))"
-    
-    nv_frame_data_length = read(fi,Int32)
-
-    roi_group_data_length = read(fi,Int32)
-    return (ifd_header_pos,nv_frame_data_length,roi_group_data_length) 
-end
-
-function read_SI_meta(fi,header_length)
-    parse_SI_meta(String(read(fi,header_length)))
-end
-
-
-
-function extract_image_properties(extracomment)
-    framesPerVolume = Meta.parse(extracomment["hFastZ.numFramesPerVolume"])
-    if typeof(framesPerVolume) !== Expr
-        nSlices = Meta.parse(extracomment["hFastZ.numFramesPerVolume"])
-        nFrames = Meta.parse(extracomment["hFastZ.numVolumes"])
-        samplingTime = (1/Meta.parse(extracomment["hRoiManager.scanVolumeRate"]))
-    else
-        nFrames = Meta.parse(extracomment["hStackManager.framesPerSlice"])
-        nSlices = 1
-        samplingTime = Meta.parse(extracomment["hRoiManager.scanFramePeriod"])
-    end
-    pixelsPerLine = Meta.parse(extracomment["hRoiManager.pixelsPerLine"])
-    linesPerFrame = Meta.parse(extracomment["hRoiManager.linesPerFrame"])
-    realNSlices = nSlices - Meta.parse(extracomment["hFastZ.numDiscardFlybackFrames"])
-    
-    resolutionXY = 2*eval(Meta.parse(extracomment["hRoiManager.imagingFovUm"]))[2,1]/Meta.parse(extracomment["hRoiManager.pixelsPerLine"])
-    resolutionZ = Meta.parse(extracomment["hStackManager.stackZStepSize"])
-
-    return (pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realNSlices)
+    out
 end
 
 function myrange(q::SharedArray,bigrange)
@@ -187,7 +120,6 @@ end
 
 function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength)
    writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,myrange(out,[0,length(files)]))
-   
 end
 
 function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,filerange)
@@ -239,56 +171,40 @@ function scanImage2016Reader(file::String;binFile=nothing)
     scanImage2016Reader([file];binFile=binFile)
 end
 
-function scanImage5Reader(f;objMag=40,shared=false,mapped=false,binFile="imgFile")
-
-    img = load(File(format"TIFF",f))
-    extraprops = magickinfo(f,["comment"])
-
-    ## Correcting the fact that ImageMagick reads the image as unsigned integers (and return the integer value)
-    img = reinterpret(Int16,img)
-
-    comment = extraprops["comment"]
-    comment = split(comment,"\n")[1:end-1]
-    comment = [split(replace(replace(str,"'","\""),"scanimage.SI5.","")," = ") for str in comment]
-    comment = Dict(strip(des[1]) => des[2] for des in comment)
- 
-    ## Extract the dimensions/number of frames from the SI comment
-    framesAcq = size(img,3)#parse(comment["frameNumberAcquisition"])
-    nSlices = nSlices =  parse(comment["stackNumSlices"])
-    nFrames = div(framesAcq,nSlices)
-    if nSlices>1
-        samplingTime = samplingTime = parse(comment["fastZPeriod"])
-    else
-        samplingTime = samplingTime = parse(comment["scanFramePeriod"])
-    end
-   
-    img = img[:,:,1:(nFrames*nSlices)]
-
-    img = reshape(img,(size(img)[1],size(img)[2],nSlices,nFrames))
-    img = img[:,:,1:(nSlices-parse(comment["fastZNumDiscardFrames"])),:]
-    #img = Gray.(img)
-    
-    resolutionXY = ((tan(10*2*pi/360)*45000/objMag)/(parse(comment["pixelsPerLine"])*parse(comment["zoomFactor"])))
-    resolutionZ = (parse(comment["stackZStepSize"])/10)
-   
-    if shared
-        img = SharedArray(img)
-    elseif mapped
-        img = SharedArray(binFile,img)
-    end
-    
-    img = ImageMeta(AxisArray(img,Axis{:x}(range(0,resolutionXY,size(img)[1])),
-                              Axis{:y}(range(0,resolutionXY,size(img)[2])),
-                              Axis{:z}(range(0,resolutionZ,size(img)[3])),
-                              Axis{:time}(range(0,samplingTime,size(img)[4]))),comment=comment)
-  
-    
-    img
-    
-end
- 
-
 export scanImage2016Reader, scanImage5Reader
 
-end # module
 
+## Reading the metadata header as a Dictionary, in case it's not a JSON header
+function makeLineDict(metaLine)
+    metaLine = split(metaLine,"= ")
+    metaNames = String.(strip.(split(metaLine[1],".")))
+    d = Dict(metaNames[end] => parseSIField(metaLine[2]))
+    for i in (length(metaNames)-1):-1:1
+        d = Dict(metaNames[i] => d)
+    end
+    d
+end
+
+function recursiveMerge(dicts...)
+    merge(recursiveMerge,dicts...)
+end
+
+function parseSIField(input)
+    input = replace(input,"'"=>"")
+    out  = try
+        eval(Meta.parse(input))
+    catch
+        input
+    end
+    out
+end
+
+function parse_SI_meta(meta)
+    jsonStart = findfirst("{\n",meta)[1]
+    rois = JSON.parse(meta[jsonStart:end-1])
+    metaP = split(meta[1:(jsonStart-3)],"\n")
+    metaP = recursiveMerge([makeLineDict(mL) for mL in metaP]...)
+    merge(metaP,rois)
+end
+
+end # module
