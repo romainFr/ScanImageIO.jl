@@ -2,7 +2,7 @@ module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 
 ## Loads a series of scanImage files, possibly into a binary file (via SharedArrays)
-function scanImage2016Reader(files::Array{String,1};binFile=nothing)
+function read_movie_set(files::Array{String,1};binFile=nothing,json=true)
 
     
     @info "Reading metadata"
@@ -50,7 +50,8 @@ function scanImage2016Reader(files::Array{String,1};binFile=nothing)
     
 end
 
-function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
+## Read a SI movie and return an array of SharedArrays
+function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing,binFile=nothing)
     px,sz,data,metadata = ScanImageTiffReader.open(f) do io
         ScanImageTiffReader.pxtype(io),ScanImageTiffReader.size(io),ScanImageTiffReader.data(io),json ? JSON.parse(ScanImageTiffReader.metadata(io)) : parse_SI_meta(ScanImageTiffReader.metadata(io))
     end 
@@ -90,22 +91,38 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
         lineOffset = 1
         roisPos = Array{Array{Int64,1},1}(undef,nRois)
         rois = isnothing(rois) ? (1:nRois) : rois
-        out = Array{Any,1}(undef,length(rois))
+        dataOut = Array{Any,1}(undef,length(rois))
         for i in 1:nRois
             roisPos[i] = lineOffset:(lineOffset+roiLines[i]-1)
             lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
         end
         i = 1
-        for r in rois
-            out[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-            out[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
-            i += 1
+        if isnothing(binFile)
+            for r in rois
+                dataOut[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+                dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
+                i += 1
+            end
+        else
+            for r in rois
+                binFileR = binFile*"_roi_$(r)"
+                binFileR = abspath(binFileR)
+                dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+                dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
+                i += 1
+            end
         end
     else
-        out = SharedArray{px}((sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-        out[:] = data[:,:,channels,frames,slices,volumes]
+        dataOut = Array{Any,1}(undef,1)
+        if isnothing(binFile)
+            dataOut[1] = SharedArray{px}((sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+            dataOut[1][:] = data[:,:,channels,frames,slices,volumes]
+        else
+            binFile = abspath(binFile)
+            dataOut[1] = SharedArray{px}(binFile,(sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+        end
     end
-    out
+    dataOut
 end
 
 function myrange(q::SharedArray,bigrange)
