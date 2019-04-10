@@ -5,18 +5,8 @@ using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 function read_movie_set(files::Array{String,1};binFile=nothing,json=true)
 
     
-    @info "Reading metadata"
-    #(pixelsPerLine,linesPerFrame,nSlices,nFrames,resolutionXY,resolutionZ,samplingTime,realSlices) = read_metadata(files[1],read_pos=false)
-
-
-    
-    nFrames = [nFrames]
-    
-    for f in files[2:end]
-        tempMetadata = read_metadata(f,read_pos=false)
-        @assert tempMetadata[[1:3;5:7]] == (pixelsPerLine,linesPerFrame,nSlices,resolutionXY,resolutionZ,samplingTime) "Images do not have the same size"
-        nFrames = vcat(nFrames,tempMetadata[4])
-    end
+    @info "Reading metadata" ## First need to check that the movies have compatible sizes
+ 
 
     ## Finding the longest recording and get the frame positions from this one 
     long_run = findmax(nFrames)[2]
@@ -50,6 +40,21 @@ function read_movie_set(files::Array{String,1};binFile=nothing,json=true)
     
 end
 
+## Wrappers for SI metadata
+nframes(SImeta) = SImeta["SI"]["hStackManager"]["framesPerSlice"]
+nslices(SImeta) = SImeta["SI"]["hStackManager"]["numSlices"]
+savedChannels(SImeta) = SImeta["SI"]["hChannels"]["channelSave"]
+hasfastz(SImeta) = (SImeta["SI"]["hFastZ"]["hasFastZ"] == 1)
+nslicesAcquired(SImeta) =  hasfastz(SImeta) ? SImeta["SI"]["hFastZ"]["numFramesPerVolume"] : nslices(SImeta)
+nvolumes(SImeta) = hasfastz(SImeta) ? SImeta["SI"]["hFastZ"]["numVolumes"] : 1
+hasmROI(SImeta) = (SImeta["SI"]["hRoiManager"]["mroiEnable"] == 1)
+nrois(SImeta) = hasmROI(SImeta) ? length(SImeta["RoiGroups"]["imagingRoiGroup"]["rois"]) : 1
+volumeRate(SImeta) = SImeta["SI"]["hRoiManager"]["scanVolumeRate"]
+frameRate(SImeta) = SImeta["SI"]["hRoiManager"]["scanFrameRate"]
+framePeriod(SImeta) = SImeta["SI"]["hRoiManager"]["scanFramePeriod"]
+nlinesBetweenFields(SImeta) = round(SImeta["SI"]["hScan2D"]["flytoTimePerScanfield"]/SImeta["SI"]["hRoiManager"]["linePeriod"])
+nlinesPerRoi(SImeta) = [SImeta["RoiGroups"]["imagingRoiGroup"]["rois"][i]["scanfields"]["pixelResolutionXY"][2] for i in 1:nrois(SImeta)]
+
 ## Read a SI movie and return an array of SharedArrays
 function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing,binFile=nothing)
     px,sz,data,metadata = ScanImageTiffReader.open(f) do io
@@ -57,17 +62,12 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
     end 
 
     fullDims = 6
-    channelsAvailable = metadata["SI"]["hChannels"]["channelSave"]
+    channelsAvailable = savedChannels(SImeta)
     nChannels = length(channelsAvailable)
-    nFrames = metadata["SI"]["hStackManager"]["framesPerSlice"]
-    nRealSlices = metadata["SI"]["hStackManager"]["numSlices"]
-    if metadata["SI"]["hFastZ"]["hasFastZ"] == 1
-        nAcquiredSlices = metadata["SI"]["hFastZ"]["numFramesPerVolume"]
-        nVolumes = metadata["SI"]["hFastZ"]["numVolumes"]
-    else
-        nAcquiredSlices = nRealSlices
-        nVolumes = 1
-    end
+    nFrames = nframes(metadata)
+    nRealSlices = nslices(metadata)
+    nAcquiredSlices = nslicesAcquired(metadata)
+    nVolumes = nvolumes(metadata)
 
     if nVolumes == 1
         fullDims =5
@@ -84,10 +84,10 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
     data = reshape(data,(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
     data = permutedims(data,(2,1,3,4,5,6))
 
-    if metadata["SI"]["hRoiManager"]["mroiEnable"] == 1
-        nRois = length(metadata["RoiGroups"]["imagingRoiGroup"]["rois"])
-        linesBetweenScanFields = round(metadata["SI"]["hScan2D"]["flytoTimePerScanfield"]/metadata["SI"]["hRoiManager"]["linePeriod"])
-        roiLines = [metadata["RoiGroups"]["imagingRoiGroup"]["rois"][i]["scanfields"]["pixelResolutionXY"][2] for i in 1:nRois]
+    if hasmRoi(metadata)
+        nRois = nrois(metadata)
+        linesBetweenScanFields = nlinesBetweenFields(metadata) 
+        roiLines = nlinesPerRoi(metadata)
         lineOffset = 1
         roisPos = Array{Array{Int64,1},1}(undef,nRois)
         rois = isnothing(rois) ? (1:nRois) : rois
