@@ -6,8 +6,11 @@ function read_movie_set(files::Array{String,1};binFile=nothing,json=true)
 
     
     @info "Reading metadata" ## First need to check that the movies have compatible sizes
- 
-
+    fullMeta = [ScanImageTiffReader.open(io -> json ? JSON.parse(ScanImageTiffReader.metadata(io)) : parse_SI_meta(ScanImageTiffReader.metadata(io)),f)]
+    fullSz = [ScanImageTiffReader.open(io -> ScanImageTiffReader.size(io),f)]
+    
+    @assert all([f[1:2] == fullSz[1][1:2] for f in fullSz]) "Frames do not have the same size"
+    
     ## Finding the longest recording and get the frame positions from this one 
     long_run = findmax(nFrames)[2]
     im_pos = read_metadata(files[long_run],read_pos=true)[9]
@@ -47,13 +50,32 @@ savedChannels(SImeta) = SImeta["SI"]["hChannels"]["channelSave"]
 hasfastz(SImeta) = (SImeta["SI"]["hFastZ"]["hasFastZ"] == 1)
 nslicesAcquired(SImeta) =  hasfastz(SImeta) ? SImeta["SI"]["hFastZ"]["numFramesPerVolume"] : nslices(SImeta)
 nvolumes(SImeta) = hasfastz(SImeta) ? SImeta["SI"]["hFastZ"]["numVolumes"] : 1
-hasmROI(SImeta) = (SImeta["SI"]["hRoiManager"]["mroiEnable"] == 1)
-nrois(SImeta) = hasmROI(SImeta) ? length(SImeta["RoiGroups"]["imagingRoiGroup"]["rois"]) : 1
+hasmRoi(SImeta) = (SImeta["SI"]["hRoiManager"]["mroiEnable"] == 1)
+nrois(SImeta) = hasmRoi(SImeta) ? length(SImeta["RoiGroups"]["imagingRoiGroup"]["rois"]) : 1
 volumeRate(SImeta) = SImeta["SI"]["hRoiManager"]["scanVolumeRate"]
 frameRate(SImeta) = SImeta["SI"]["hRoiManager"]["scanFrameRate"]
 framePeriod(SImeta) = SImeta["SI"]["hRoiManager"]["scanFramePeriod"]
 nlinesBetweenFields(SImeta) = round(SImeta["SI"]["hScan2D"]["flytoTimePerScanfield"]/SImeta["SI"]["hRoiManager"]["linePeriod"])
 nlinesPerRoi(SImeta) = [SImeta["RoiGroups"]["imagingRoiGroup"]["rois"][i]["scanfields"]["pixelResolutionXY"][2] for i in 1:nrois(SImeta)]
+
+## To deal with cases where the acquisition was aborted
+function acquired_channel_frame_slice_volume(SImeta,sz)
+    nC = length(savedChannels(SImeta))
+    nF = nframes(SImeta)
+    nS = nslicesAcquired(SImeta)
+    nV = nvolumes(SImeta)
+    if sz[3] == nC*nF*nS*nV
+        return (nC,nF,nS,nV)
+    else
+        if sz[3] <= nC*nF
+            return (0,0,0,0)
+        elseif sz[3] <= nC*nF*nS
+            return (nC,nF,div(sz[3],nC*nF),1)
+        else
+            return (nC,nF,nS,div(sz[3],nC*nF*nS))
+        end 
+    end
+end
 
 ## Read a SI movie and return an array of SharedArrays
 function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing,binFile=nothing)
@@ -62,12 +84,15 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
     end 
 
     fullDims = 6
-    channelsAvailable = savedChannels(SImeta)
-    nChannels = length(channelsAvailable)
-    nFrames = nframes(metadata)
+    channelsAvailable = savedChannels(metadata)
+    nChannels,nFrames,nAcquiredSlices,nVolumes = acquired_channel_frame_slice_volume(metadata,sz)
+    dataLength = sz[1]*sz[2]*nChannels*nFrames*nAcquiredSlices*nVolumes
+    
+    #nChannels = length(channelsAvailable)
+    #nFrames = nframes(metadata)
     nRealSlices = nslices(metadata)
-    nAcquiredSlices = nslicesAcquired(metadata)
-    nVolumes = nvolumes(metadata)
+    #nAcquiredSlices = nslicesAcquired(metadata)
+    #nVolumes = nvolumes(metadata)
 
     if nVolumes == 1
         fullDims =5
@@ -81,7 +106,7 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
     slices = isnothing(slices) ? (1:nRealSlices) : slices
     volumes = isnothing(volumes) ? (1:nVolumes) : volumes
 
-    data = reshape(data,(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
+    data = reshape(data[1:dataLength],(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
     data = permutedims(data,(2,1,3,4,5,6))
 
     if hasmRoi(metadata)
@@ -195,7 +220,7 @@ export scanImage2016Reader, scanImage5Reader
 function makeLineDict(metaLine)
     metaLine = split(metaLine,"= ")
     metaNames = String.(strip.(split(metaLine[1],".")))
-    d = Dict(metaNames[end] => parseSIField(metaLine[2]))
+    d = Dict{String,Any}(metaNames[end] => parseSIField(metaLine[2]))
     for i in (length(metaNames)-1):-1:1
         d = Dict(metaNames[i] => d)
     end
