@@ -10,21 +10,25 @@ function read_movie_set(files::Array{String,1};binFile=nothing,json=true)
     fullSz = [ScanImageTiffReader.open(io -> ScanImageTiffReader.size(io),f)]
     
     @assert all([f[1:2] == fullSz[1][1:2] for f in fullSz]) "Frames do not have the same size"
+    @assert all([frameRate(fm) == frameRate(fullMeta[1]) for fm in fullMeta]) "Not the same frame rate"
+    @assert all([hasfastz(fm) == hasfastz(fullMeta[1]) for fm in fullMeta])  "Not all movies are volumetric (or non volumetric)"
+    @assert all([volumeRate(fm) == volumeRate(fullMeta[1]) for fm in fullMeta]) "Not the same volume rate"
+    @assert all([nrois(fm) == nrois(fullMeta[1]) for fm in fullMeta]) "Not the same ROI structure"
     
-    ## Finding the longest recording and get the frame positions from this one 
-    long_run = findmax(nFrames)[2]
-    im_pos = read_metadata(files[long_run],read_pos=true)[9]
- 
-    nTotalFrames = sum(nFrames)
-    if binFile == nothing
-        @info "Creating shared Array"
-        out = SharedArray{Int16}((linesPerFrame,pixelsPerLine,realSlices,nTotalFrames))
-    else
-        binFile = abspath(binFile)
-        @info "Creating bin file $(binFile)"
-        out = SharedArray{Int16}(binFile,(linesPerFrame,pixelsPerLine,realSlices,nTotalFrames))
-    end
+    movieSizes = [acquired_channel_frame_slice_volume(fm,fullSz[1]) for fm in fullMeta]
 
+    if hasfastz(fullMeta[1])
+        nTotalVolumes = sum([mS[4] for mS in movieSizes])
+        if binFile == nothing
+            @info "Creating shared Array"
+            out = SharedArray{Int16}((fullSz[1][2],fullSz[1][1],nslices(fullMeta[1]),nTotalVolumes))
+        else
+            binFile = abspath(binFile)
+            @info "Creating bin file $(binFile)"
+            out = SharedArray{Int16}(binFile,(fullSz[1][2],fullSz[1][1],nslices(fullMeta[1]),nTotalVolumes))
+        end
+    end
+        
     im_length = pixelsPerLine * linesPerFrame * realSlices
     
     frame_length = pixelsPerLine * linesPerFrame
@@ -86,13 +90,9 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
     fullDims = 6
     channelsAvailable = savedChannels(metadata)
     nChannels,nFrames,nAcquiredSlices,nVolumes = acquired_channel_frame_slice_volume(metadata,sz)
-    dataLength = sz[1]*sz[2]*nChannels*nFrames*nAcquiredSlices*nVolumes
-    
-    #nChannels = length(channelsAvailable)
-    #nFrames = nframes(metadata)
+    dataLength = sz[1]*sz[2]*nChannels*nFrames*nAcquiredSlices*nVolumes   
     nRealSlices = nslices(metadata)
-    #nAcquiredSlices = nslicesAcquired(metadata)
-    #nVolumes = nvolumes(metadata)
+
 
     if nVolumes == 1
         fullDims =5
