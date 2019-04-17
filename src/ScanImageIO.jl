@@ -2,11 +2,11 @@ module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 
 ## Loads a series of scanImage files, possibly into a binary file (via SharedArrays)
-function read_movie_set(files::Array{String,1};binFile=nothing,json=true)
+function read_movie_set(files::Array{String,1};binFile=nothing)
 
     
     @info "Reading metadata" ## First need to check that the movies have compatible sizes
-    fullMeta = [ScanImageTiffReader.open(io -> json ? JSON.parse(ScanImageTiffReader.metadata(io)) : parse_SI_meta(ScanImageTiffReader.metadata(io)),f)]
+    fullMeta = [ScanImageTiffReader.open(io -> parse_SI_meta(ScanImageTiffReader.metadata(io)),f)]
     fullSz = [ScanImageTiffReader.open(io -> ScanImageTiffReader.size(io),f)]
     
     @assert all([f[1:2] == fullSz[1][1:2] for f in fullSz]) "Frames do not have the same size"
@@ -82,9 +82,9 @@ function acquired_channel_frame_slice_volume(SImeta,sz)
 end
 
 ## Read a SI movie and return an array of SharedArrays
-function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing,binFile=nothing)
+function read_movie(f::String;rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
     px,sz,data,metadata = ScanImageTiffReader.open(f) do io
-        ScanImageTiffReader.pxtype(io),ScanImageTiffReader.size(io),ScanImageTiffReader.data(io),json ? JSON.parse(ScanImageTiffReader.metadata(io)) : parse_SI_meta(ScanImageTiffReader.metadata(io))
+        ScanImageTiffReader.pxtype(io),ScanImageTiffReader.size(io),ScanImageTiffReader.data(io),parse_SI_meta(ScanImageTiffReader.metadata(io))
     end 
 
     fullDims = 6
@@ -122,30 +122,30 @@ function read_movie(f::String;json=true,rois=nothing,channels=nothing,frames=not
             lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
         end
         i = 1
-        if isnothing(binFile)
+#        if isnothing(binFile)
             for r in rois
                 dataOut[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
                 dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
                 i += 1
             end
-        else
-            for r in rois
-                binFileR = binFile*"_roi_$(r)"
-                binFileR = abspath(binFileR)
-                dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-                dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
-                i += 1
-            end
-        end
+ #       else
+ #           for r in rois
+ #               binFileR = binFile*"_roi_$(r)"
+ #               binFileR = abspath(binFileR)
+ #               dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+ #               dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
+ #               i += 1
+ #           end
+ #       end
     else
         dataOut = Array{Any,1}(undef,1)
-        if isnothing(binFile)
-            dataOut[1] = SharedArray{px}((sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-            dataOut[1][:] = data[:,:,channels,frames,slices,volumes]
-        else
-            binFile = abspath(binFile)
-            dataOut[1] = SharedArray{px}(binFile,(sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-        end
+ #       if isnothing(binFile)
+        dataOut[1] = SharedArray{px}((sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+        dataOut[1][:] = data[:,:,channels,frames,slices,volumes]
+ #       else
+ #           binFile = abspath(binFile)
+ #           dataOut[1] = SharedArray{px}(binFile,(sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
+ #       end
     end
     dataOut
 end
@@ -243,10 +243,14 @@ end
 
 function parse_SI_meta(meta)
     jsonStart = findfirst("{\n",meta)[1]
-    rois = JSON.parse(meta[jsonStart:end-1])
-    metaP = split(meta[1:(jsonStart-3)],"\n")
-    metaP = recursiveMerge([makeLineDict(mL) for mL in metaP]...)
-    merge(metaP,rois)
+    if jsonStart == 1
+        return JSON.parse(meta)
+    else
+        rois = JSON.parse(meta[jsonStart:end-1])
+        metaP = split(meta[1:(jsonStart-3)],"\n")
+        metaP = recursiveMerge([makeLineDict(mL) for mL in metaP]...)
+        return merge(metaP,rois)
+    end
 end
 
 end # module
