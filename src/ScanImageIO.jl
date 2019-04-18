@@ -2,48 +2,93 @@ module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 
 ## Loads a series of scanImage files, possibly into a binary file (via SharedArrays)
-function read_movie_set(files::Array{String,1};binFile=nothing)
+function read_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
 
     
     @info "Reading metadata" ## First need to check that the movies have compatible sizes
-    fullMeta = [ScanImageTiffReader.open(io -> parse_SI_meta(ScanImageTiffReader.metadata(io)),f)]
-    fullSz = [ScanImageTiffReader.open(io -> ScanImageTiffReader.size(io),f)]
+    fullMeta = [ScanImageTiffReader.open(io -> parse_SI_meta(ScanImageTiffReader.metadata(io)),f) for f in files]
+    fullSz = [ScanImageTiffReader.open(io -> ScanImageTiffReader.size(io),f) for f in files]
+    px = ScanImageTiffReader.open(io -> ScanImageTiffReader.size(io),files[1])
     
     @assert all([f[1:2] == fullSz[1][1:2] for f in fullSz]) "Frames do not have the same size"
     @assert all([frameRate(fm) == frameRate(fullMeta[1]) for fm in fullMeta]) "Not the same frame rate"
     @assert all([hasfastz(fm) == hasfastz(fullMeta[1]) for fm in fullMeta])  "Not all movies are volumetric (or non volumetric)"
     @assert all([volumeRate(fm) == volumeRate(fullMeta[1]) for fm in fullMeta]) "Not the same volume rate"
     @assert all([nrois(fm) == nrois(fullMeta[1]) for fm in fullMeta]) "Not the same ROI structure"
+    @assert all([savedChannels(fm) == savedChannels(fullMeta[1]) for fm in fullMeta]) "Not the same channels acquired"
     
     movieSizes = [acquired_channel_frame_slice_volume(fm,fullSz[1]) for fm in fullMeta]
+    sz = fullSz[1][1:2]
+    nChannels = movieSizes[1][1]
+    nFrames = [m[2] for m in movieSizes]
+    nAcquiredSlices = [m[3] for m in movieSizes]
+    nRealSlices = [nslices(fm) for fm in fullMeta]
+    nVolumes = [m[4] for m in movieSizes]
+    
+    channels = isnothing(channels) ? (1:nChannels) : channels
+    frames = [isnothing(frames) ? (1:nFrames[i]) : frames for i in 1:length(movieSizes)]
+    slices = [isnothing(slices) ? (1:nRealSlices[i]) : slices for i in 1:length(movieSizes)]
+    volumes = [isnothing(volumes) ? (1:nVolumes[i]) : volumes i in 1:length(movieSizes)]
+    nRois = nrois(fullMeta[1])
+    rois = isnothing(rois) ? (1:nRois) : rois
 
-    if hasfastz(fullMeta[1])
-        nTotalVolumes = sum([mS[4] for mS in movieSizes])
-        if binFile == nothing
-            @info "Creating shared Array"
-            out = SharedArray{Int16}((fullSz[1][2],fullSz[1][1],nslices(fullMeta[1]),nTotalVolumes))
-        else
-            binFile = abspath(binFile)
-            @info "Creating bin file $(binFile)"
-            out = SharedArray{Int16}(binFile,(fullSz[1][2],fullSz[1][1],nslices(fullMeta[1]),nTotalVolumes))
+    nVolumes_Full = sum([length(vol) for vol in volumes])
+    
+    if nVolumes_Full > length(movieSizes)
+        nFrames_Full,nSlices_Full = length(frames[1]),length(slices[1])
+        fullDims = 6
+    elseif nVolumes_Full == length(movieSizes) ## 1 volume per movie, hence not a volume
+        fullDims = 5
+        nSlices_Full = sum([length(sl) for sl in slices])
+        nFrames_Full = length(frames[1])
+        if nSlices_Full == length(movieSizes) ## Repetitions through frames not volumes
+            fullDims = 4
+            nFrames_Full = sum([length(fr) for fr in frames])
         end
     end
-        
-    im_length = pixelsPerLine * linesPerFrame * realSlices
     
-    frame_length = pixelsPerLine * linesPerFrame
+    dataLengths = [prod([sz... ,nChannels[i],nFrames[i],nAcquiredSlices[i],nVolumes[i],nRois]) for i in 1:length(fullMeta)]
+    
+    if hasmRoi(fullMeta[1])
+        linesBetweenScanFields = nlinesBetweenFields(fullMeta[1]) 
+        roiLines = nlinesPerRoi(fullMeta[1])
+        lineOffset = 1
+        roisPos = Array{Array{Int64,1},1}(undef,nRois)         
+        for i in 1:nRois
+            roisPos[i] = lineOffset:(lineOffset+roiLines[i]-1)
+            lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
+        end
+    else
+        roiPos = 1:sz[2]
+        roiLines = sz[2]
+    end
 
-    pos_idx = [vcat([i:(i+realSlices-1) for i in 1:nSlices:nF]...) for nF in nFrames*nSlices]
-    im_pos = [im_pos[pI] for pI in pos_idx]
+    dataOut = Array{SharedArray}(undef,length(rois))
     
+    i = 1
+    if isnothing(binFile)
+        for r in rois
+            dataOut[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[1:fullDims])
+            i+=1
+        end
+    else
+        for r in rois
+            binFileR = binFile*"_roi_$(r)"
+            binFileR = abspath(binFileR)
+            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[1:fullDims])
+            i+=1
+        end
+    end
+    
+    movingDim = (frames,slices,volumes)[fullD-3]
+    offsetMoving = [1;cumsum([length(mD) for mD in movingDim])...]
     @sync begin
-        for p in procs(out)          
-            @async remotecall_wait(writeim_toshared_native_chunk, p, out,files,startPoints,im_pos,frame_length)
+        for p in procs(dataOut[1])          
+            @async remotecall_wait(write_movie_toshared_native_chunk, p, dataOut,files,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,channels,frames,slices,volumes,rois,offsetMoving)
         end
     end
- 
-    ## Returning the SharedArray and a dict of metadata
-    (out,Dict("framesPerTrial" => nFrames,"resolutionXY"=>resolutionXY,"resolutionZ"=>resolutionZ,"samplingTime"=>samplingTime))
+    
+    dataOut
     
 end
 
@@ -82,72 +127,31 @@ function acquired_channel_frame_slice_volume(SImeta,sz)
 end
 
 ## Read a SI movie and return an array of SharedArrays
-function read_movie(f::String;rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
-    px,sz,data,metadata = ScanImageTiffReader.open(f) do io
-        ScanImageTiffReader.pxtype(io),ScanImageTiffReader.size(io),ScanImageTiffReader.data(io),parse_SI_meta(ScanImageTiffReader.metadata(io))
-    end 
+function write_movie_toshared_chunk(out,files,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,startPoints,offsets)
+   write_movie_toshared_native_chunk(out,files,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,myrange(out[1],[0,length(files)]))
+end
 
-    fullDims = 6
-    channelsAvailable = savedChannels(metadata)
-    nChannels,nFrames,nAcquiredSlices,nVolumes = acquired_channel_frame_slice_volume(metadata,sz)
-    dataLength = sz[1]*sz[2]*nChannels*nFrames*nAcquiredSlices*nVolumes   
-    nRealSlices = nslices(metadata)
-
-
-    if nVolumes == 1
-        fullDims =5
-        if nRealSlices == 1
-            fullDims = 4
-        end
+function write_movie_toshared_chunk(out,files,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,filerange)
+    for i in filerange
+        
+        write_movie_to_shared(out,files[i],nChannels,nFrames[i],nAcquiredSlices[i],nVolumes[i],fullD,dataLength[i],channels,frames[i],slices[i],volumes[i],rois,offsets[i])
     end
+end
 
-    channels = isnothing(channels) ? (1:nChannels) : channels
-    frames = isnothing(frames) ? (1:nFrames) : frames
-    slices = isnothing(slices) ? (1:nRealSlices) : slices
-    volumes = isnothing(volumes) ? (1:nVolumes) : volumes
-
-    data = reshape(data[1:dataLength],(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
-    data = permutedims(data,(2,1,3,4,5,6))
-
-    if hasmRoi(metadata)
-        nRois = nrois(metadata)
-        linesBetweenScanFields = nlinesBetweenFields(metadata) 
-        roiLines = nlinesPerRoi(metadata)
-        lineOffset = 1
-        roisPos = Array{Array{Int64,1},1}(undef,nRois)
-        rois = isnothing(rois) ? (1:nRois) : rois
-        dataOut = Array{Any,1}(undef,length(rois))
-        for i in 1:nRois
-            roisPos[i] = lineOffset:(lineOffset+roiLines[i]-1)
-            lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
-        end
-        i = 1
-#        if isnothing(binFile)
-            for r in rois
-                dataOut[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-                dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
-                i += 1
-            end
- #       else
- #           for r in rois
- #               binFileR = binFile*"_roi_$(r)"
- #               binFileR = abspath(binFileR)
- #               dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
- #               dataOut[i][:] = data[roisPos[r],:,channels,frames,slices,volumes]
- #               i += 1
- #           end
- #       end
-    else
-        dataOut = Array{Any,1}(undef,1)
- #       if isnothing(binFile)
-        dataOut[1] = SharedArray{px}((sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
-        dataOut[1][:] = data[:,:,channels,frames,slices,volumes]
- #       else
- #           binFile = abspath(binFile)
- #           dataOut[1] = SharedArray{px}(binFile,(sz[2],sz[1],length(channels),length(frames),length(slices),length(volumes))[1:fullDims])
- #       end
+function write_movie_to_shared(out,f::String,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offset)
+    data = ScanImageTiffReader.open(f) do io
+        ScanImageTiffReader.data(io)
     end
-    dataOut
+    
+    for r in rois
+        data = reshape(data[1:dataLength],(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
+        data = permutedims(data,(2,1,3,4,5,6))
+
+        linearOffset = 1 + (offset-1) * stride(out[r],fullD)
+        outLength = prod([roisPos[r],sz[1],length(channels),length(frames),length(slices),length(volumes)])
+        out[r][linearOffset:(linearOffset+outLength)] = data[roisPos[r],:,channels,frames,slices,volumes]
+    end
+    out
 end
 
 function myrange(q::SharedArray,bigrange)
@@ -160,60 +164,7 @@ function myrange(q::SharedArray,bigrange)
     splits[idx]+1:splits[idx+1]
 end
 
-function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength)
-   writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,myrange(out,[0,length(files)]))
-end
 
-function writeim_toshared_native_chunk(out,files,startPoints,im_pos,imlength,filerange)
-    for i in filerange
-        writeim_toshared_native(out,files[i],startPoints[i],im_pos[i],imlength)
-    end
-end
-
-function writeim_toshared_native(out,file,startPoint,im_pos,imlength)
-
-    imsz = (size(out,2),size(out,1))
-    
-    try
-        fi = open(file)
-        sP = startPoint
-        for fr in 1:length(im_pos)
-            seek(fi,im_pos[fr])
-            out[sP:(sP+imlength-1)] = permutedims(reshape([read(fi,Int16) for j in 1:imlength],imsz),(2,1))
-            sP+=imlength
-        end
-        @info "Loaded file $(file)"
-        close(fi)
-        return out
-    catch
-        @info "Need to read the image positions for file $(file)"
-        metad = read_metadata(file,read_pos=true)
-        realSlices = metad[8]
-        im_pos = metad[9]
-        nSlices = metad[3]
-        nFrames =metad[4]
-        pos_idx = vcat([i:(i+realSlices-1) for i in 1:nSlices:nFrames]...)
-        im_pos = im_pos[pos_idx]
-        fi = open(file)
-        for fr in 1:length(im_pos)
-            seek(fi,im_pos[fr])
-            out[startPoint:(startPoint+imlength-1)] = permutedims(reshape([read(fi,Int16) for j in 1:imlength],imsz),(2,1))
-            startPoint+=imlength
-        end
-        @info "Loaded file $(file)"
-        close(fi)
-        return out
-    end
-   
-   
-end
-
-## Reads a single file.
-function scanImage2016Reader(file::String;binFile=nothing)
-    scanImage2016Reader([file];binFile=binFile)
-end
-
-export scanImage2016Reader, scanImage5Reader
 
 
 ## Reading the metadata header as a Dictionary, in case it's not a JSON header
