@@ -1,8 +1,8 @@
 module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
-
+export read_SI_movie_set
 ## Loads a series of scanImage files, possibly into a binary file (via SharedArrays). Returns data,metadata,first frame description and movie sizes (channels,frames,slices,volumes)
-function read_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
+function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
 
     
     @info "Reading metadata" ## First need to check that the movies have compatible sizes
