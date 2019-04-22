@@ -1,7 +1,7 @@
 module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 
-## Loads a series of scanImage files, possibly into a binary file (via SharedArrays)
+## Loads a series of scanImage files, possibly into a binary file (via SharedArrays). Returns data,metadata,first frame description and movie sizes (channels,frames,slices,volumes)
 function read_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
 
     
@@ -111,7 +111,7 @@ function read_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,chan
         end
     end
     
-    dataOut,fullFirstFrame,nVolumes
+    dataOut,fullMeta,fullFirstFrame,movieSizes
     
 end
 
