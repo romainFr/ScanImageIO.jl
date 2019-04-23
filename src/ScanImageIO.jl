@@ -63,9 +63,9 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     rois = isnothing(rois) ? (1:nAcquiredRois) : rois
     nRois = length(rois)
 
-    nFrames_Full,nSlices_Full,nVolumes_Full,fullDims = get_full_size(nFrames,nSlices,nVolumes)
+    nFrames_Full,nSlices_Full,nVolumes_Full,fullDims = get_full_size(nFrames,nRealSlices,nVolumes)
     
-    dataLengths = [prod([sz... ,nAcquiredChannels,nAcquiredFrames[i],nAcquiredSlices[i],nAcquiredVolumes[i],nAcquiredRois]) for i in 1:length(fullMeta)]
+    dataLengths = [prod([sz... ,nAcquiredChannels,nAcquiredFrames[i],nAcquiredSlices[i],nAcquiredVolumes[i]]) for i in 1:length(fullMeta)]
     
     if hasmRoi(fullMeta[1])
         linesBetweenScanFields = nlinesBetweenFields(fullMeta[1]) 
@@ -77,7 +77,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
             lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
         end
     else
-        roiPos = 1:sz[2]
+        roisPos = 1:sz[2]
         roiLines = sz[2]
     end
 
@@ -104,11 +104,11 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     @info "Write movie data"
     @sync begin
         for p in procs(dataOut[1])          
-            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullDims,dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roiPos)
+            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullDims,dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
         end
     end
     
-    dataOut,fullMeta,fullFirstFrame,(nChannels,nFrames,nSlices,nVolumes)
+    dataOut,fullMeta,fullFirstFrame,(roiLines,sz[2],nChannels,nFrames,nRealSlices,nVolumes)
     
 end
 
@@ -168,7 +168,7 @@ function write_movie_to_shared(out,f::String,sz,nChannels,nFrames,nAcquiredSlice
         data = permutedims(data,(2,1,3,4,5,6))
 
         linearOffset = 1 + offset * stride(out[r],fullD)
-        outLength = prod([roisPos[r],sz[1],length(channels),length(frames),length(slices),length(volumes)])
+        outLength = prod([length(roisPos[r]),sz[1],length(channels),length(frames),length(slices),length(volumes)])
         out[r][linearOffset:(linearOffset+outLength-1)] = data[roisPos[r],:,channels,frames,slices,volumes]
     end
     out
@@ -222,9 +222,13 @@ function parse_SI_meta(meta)
 end
 
 function parse_SI_descr(meta)
-    metaP = split(meta,"\n")[1:end-1]
-    metaP = merge([makeLineDict(mL) for mL in metaP]...)
-    metaP
+    if findfirst("{\n",meta)[1] == 1
+        return JSON.parse(meta)
+    else
+        metaP = split(meta,"\n")[2:end-1]
+        metaP = merge([makeLineDict(mL) for mL in metaP]...)
+        return metaP
+    end
 end
 
 ## Get the dimensions of the array collating different movies
