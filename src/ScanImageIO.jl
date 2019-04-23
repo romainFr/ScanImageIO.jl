@@ -40,35 +40,32 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     @info "Gather movie sizes"
     movieSizes = [acquired_channel_frame_slice_volume(fullMeta[i],fullSz[i]) for i in 1:length(fullMeta)]
     sz = fullSz[1][1:2]
-    nChannels = movieSizes[1][1]
-    nFrames = [m[2] for m in movieSizes]
+    nAcquiredChannels = movieSizes[1][1]
+    nAcquiredFrames = [m[2] for m in movieSizes]
     nAcquiredSlices = [m[3] for m in movieSizes]
     nRealSlices = [nslices(fm) for fm in fullMeta]
-    nVolumes = [m[4] for m in movieSizes]
+    nAcquiredVolumes = [m[4] for m in movieSizes]
+    nAcquiredRois = nrois(fullMeta[1])
     
-    channels = isnothing(channels) ? (1:nChannels) : channels
-    frames = [isnothing(frames) ? (1:nFrames[i]) : frames for i in 1:length(movieSizes)]
+    ## Replace by the user inputed values if need be
+    channels = isnothing(channels) ? (1:nAcquiredChannels) : channels
+    nChannels = length(channels)
+    
+    frames = [isnothing(frames) ? (1:nAcquiredFrames[i]) : frames for i in 1:length(movieSizes)]
+    nFrames = [length(f) for f in frames]
+    
     slices = [isnothing(slices) ? (1:nRealSlices[i]) : slices for i in 1:length(movieSizes)]
-    volumes = [isnothing(volumes) ? (1:nVolumes[i]) : volumes for i in 1:length(movieSizes)]
-    nRois = nrois(fullMeta[1])
-    rois = isnothing(rois) ? (1:nRois) : rois
+    nRealSlices = [length(s) for s in slices]
+    
+    volumes = [isnothing(volumes) ? (1:nAcquiredVolumes[i]) : volumes for i in 1:length(movieSizes)]
+    nVolumes = [length(v) for v in volumes]
+    
+    rois = isnothing(rois) ? (1:nAcquiredRois) : rois
+    nRois = length(rois)
 
-    nVolumes_Full = sum([length(vol) for vol in volumes])
+    nFrames_Full,nSlices_Full,nVolumes_Full,fullDims = get_full_size(nFrames,nSlices,nVolumes)
     
-    if nVolumes_Full > length(movieSizes)
-        nFrames_Full,nSlices_Full = length(frames[1]),length(slices[1])
-        fullDims = 6
-    elseif nVolumes_Full == length(movieSizes) ## 1 volume per movie, hence not a volume
-        fullDims = 5
-        nSlices_Full = sum([length(sl) for sl in slices])
-        nFrames_Full = length(frames[1])
-        if nSlices_Full == length(movieSizes) ## Repetitions through frames not volumes
-            fullDims = 4
-            nFrames_Full = sum([length(fr) for fr in frames])
-        end
-    end
-    
-    dataLengths = [prod([sz... ,nChannels,nFrames[i],nAcquiredSlices[i],nVolumes[i],nRois]) for i in 1:length(fullMeta)]
+    dataLengths = [prod([sz... ,nAcquiredChannels,nAcquiredFrames[i],nAcquiredSlices[i],nAcquiredVolumes[i],nAcquiredRois]) for i in 1:length(fullMeta)]
     
     if hasmRoi(fullMeta[1])
         linesBetweenScanFields = nlinesBetweenFields(fullMeta[1]) 
@@ -111,7 +108,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
         end
     end
     
-    dataOut,fullMeta,fullFirstFrame,movieSizes
+    dataOut,fullMeta,fullFirstFrame,(nChannels,nFrames,nSlices,nVolumes)
     
 end
 
@@ -228,6 +225,25 @@ function parse_SI_descr(meta)
     metaP = split(meta,"\n")[1:end-1]
     metaP = merge([makeLineDict(mL) for mL in metaP]...)
     metaP
+end
+
+## Get the dimensions of the array collating different movies
+function get_full_size(nFrames,nSlices,nVolumes)
+    nVolumes_Full = sum(nVolumes)
+    
+    if nVolumes_Full > length(nVolumes)
+        nFrames_Full,nSlices_Full = nFrames[1],nSlices[1]
+        fullDims = 6
+    elseif nVolumes_Full == length(nVolumes) ## 1 volume per movie, hence not a volume
+        fullDims = 5
+        nSlices_Full = sum(nSlices)
+        nFrames_Full = nFrames[1]
+        if nSlices_Full == length(nVolumes) ## Repetitions through frames not volumes
+            fullDims = 4
+            nFrames_Full = sum(nFrames)
+        end
+    end
+    nFrames_Full,nSlices_Full,nVolumes_Full,fullDims
 end
 
 end # module
