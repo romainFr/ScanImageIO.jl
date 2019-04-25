@@ -2,7 +2,7 @@ module ScanImageIO
 using ScanImageTiffReader,FileIO, SharedArrays, Distributed, JSON
 export read_SI_movie_set
 ## Loads a series of scanImage files, possibly into a binary file (via SharedArrays). Returns data,metadata,first frame description and movie sizes (channels,frames,slices,volumes)
-function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing)
+function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,channels=nothing,frames=nothing,slices=nothing,volumes=nothing,dropdims=true)
 
     
     @info "Reading metadata" ## First need to check that the movies have compatible sizes
@@ -82,19 +82,25 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     end
 
     dataOut = Array{SharedArray}(undef,length(rois))
-
+    
+    if dropdims
+        dimSel = findall((roiLines[1],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[1:fullDims] .!= 1)
+    else
+        dimSel = 1:fullDims
+    end
+    
     @info "Creating shared arrays"
     i = 1
     if isnothing(binFile)
         for r in rois
-            dataOut[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[1:fullDims])
+            dataOut[i] = SharedArray{px}((roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[dimSel])
             i+=1
         end
     else
         for r in rois
             binFileR = binFile*"_roi_$(r)"
             binFileR = abspath(binFileR)
-            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[1:fullDims])
+            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[dimSel])
             i+=1
         end
     end
@@ -104,7 +110,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     @info "Write movie data"
     @sync begin
         for p in procs(dataOut[1])          
-            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullDims,dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
+            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,length(dimSel),dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
         end
     end
     
@@ -163,10 +169,10 @@ function write_movie_to_shared(out,f::String,sz,nChannels,nFrames,nAcquiredSlice
         ScanImageTiffReader.data(io)
     end
     
+    data = reshape(data[1:dataLength],(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
+    data = permutedims(data,(2,1,3,4,5,6))
+    
     for r in rois
-        data = reshape(data[1:dataLength],(sz[1],sz[2],nChannels,nFrames,nAcquiredSlices,nVolumes))
-        data = permutedims(data,(2,1,3,4,5,6))
-
         linearOffset = 1 + offset * stride(out[r],fullD)
         outLength = prod([length(roisPos[r]),sz[1],length(channels),length(frames),length(slices),length(volumes)])
         out[r][linearOffset:(linearOffset+outLength-1)] = data[roisPos[r],:,channels,frames,slices,volumes]
