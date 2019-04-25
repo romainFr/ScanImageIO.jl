@@ -110,7 +110,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     @info "Write movie data"
     @sync begin
         for p in procs(dataOut[1])          
-            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,length(dimSel),dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
+            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nAcquiredChannels,nAcquiredFrames,nAcquiredSlices,nAcquiredVolumes,length(dimSel),dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
         end
     end
     
@@ -132,6 +132,7 @@ frameRate(SImeta) = SImeta["SI"]["hRoiManager"]["scanFrameRate"]
 framePeriod(SImeta) = SImeta["SI"]["hRoiManager"]["scanFramePeriod"]
 nlinesBetweenFields(SImeta) = round(SImeta["SI"]["hScan2D"]["flytoTimePerScanfield"]/SImeta["SI"]["hRoiManager"]["linePeriod"])
 nlinesPerRoi(SImeta) = [SImeta["RoiGroups"]["imagingRoiGroup"]["rois"][i]["scanfields"]["pixelResolutionXY"][2] for i in 1:nrois(SImeta)]
+zResolution(SImeta) = SImeta["SI"]["hStackManager"]["stackZStepSize"]
 
 ## To deal with cases where the acquisition was aborted
 function acquired_channel_frame_slice_volume(SImeta,sz)
