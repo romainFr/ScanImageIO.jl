@@ -6,19 +6,19 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
 
     
     @info "Reading metadata" ## First need to check that the movies have compatible sizes
-    fullMeta = map(files) do f
+    fullMeta = pmap(files) do f
         ScanImageTiffReader.open(f) do io
             parse_SI_meta(ScanImageTiffReader.metadata(io))
         end
     end
     
-    fullSz = map(files) do f
+    fullSz = pmap(files) do f
         ScanImageTiffReader.open(f) do io
             ScanImageTiffReader.size(io)
         end
     end
 
-    fullFirstFrame = map(files) do f
+    fullFirstFrame = pmap(files) do f
         ScanImageTiffReader.open(f) do io
             parse_SI_descr(ScanImageTiffReader.description(io,1))
         end
