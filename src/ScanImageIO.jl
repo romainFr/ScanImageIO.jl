@@ -100,7 +100,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
         for r in rois
             binFileR = binFile*"_roi_$(r)"
             binFileR = abspath(binFileR)
-            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[dimSel])
+            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[dimSel],mode="w+")
             i+=1
         end
     end
@@ -108,11 +108,15 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     movingDim = (frames,slices,volumes)[fullDims-3]
     offsetMoving = [0;cumsum([length(mD) for mD in movingDim])...]
     @info "Write movie data"
-    @sync begin
-        for p in procs(dataOut[1])          
-            @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nAcquiredChannels,nAcquiredFrames,nAcquiredSlices,nAcquiredVolumes,length(dimSel),dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
-        end
+    for i in 1:length(files)
+        write_movie_to_shared(dataOut,files[i],sz,nAcquiredChannels,nAcquiredFrames[i],nAcquiredSlices[i],nAcquiredVolumes[i],length(dimSel),dataLengths[i],channels,frames[i],slices[i],volumes[i],rois,offsetMoving[i],roisPos)
     end
+  
+    #@sync begin
+    #    for p in procs(dataOut[1])          
+    #        @async remotecall_wait(write_movie_toshared_chunk, p, dataOut,files,sz,nAcquiredChannels,nAcquiredFrames,nAcquiredSlices,nAcquiredVolumes,length(dimSel),dataLengths,channels,frames,slices,volumes,rois,offsetMoving,roisPos)
+    #    end
+    #end
     
     dataOut,fullMeta,fullFirstFrame,(roiLines,sz[2],nChannels,nFrames,nRealSlices,nVolumes)
     
@@ -160,7 +164,7 @@ end
 
 function write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos,filerange)
     for i in filerange
-        
+        @info "Write movie $(i), volumes $(volumes[i][end])"
         write_movie_to_shared(out,files[i],sz,nChannels,nFrames[i],nAcquiredSlices[i],nVolumes[i],fullD,dataLength[i],channels,frames[i],slices[i],volumes[i],rois,offsets[i],roisPos)
     end
 end
