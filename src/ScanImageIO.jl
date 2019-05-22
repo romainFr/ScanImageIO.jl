@@ -77,8 +77,8 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
             lineOffset = lineOffset + roiLines[i] + linesBetweenScanFields + 1
         end
     else
-        roisPos = 1:sz[2]
-        roiLines = sz[2]
+        roisPos = [1:sz[2]]
+        roiLines = [sz[2]]
     end
 
     dataOut = Array{SharedArray}(undef,length(rois))
@@ -100,7 +100,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
         for r in rois
             binFileR = binFile*"_roi_$(r)"
             binFileR = abspath(binFileR)
-            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[dimSel],mode="w+")
+            dataOut[i] = SharedArray{px}(binFileR,(roiLines[r],sz[1],length(channels),nFrames_Full,nSlices_Full,nVolumes_Full)[dimSel])
             i+=1
         end
     end
@@ -109,7 +109,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     offsetMoving = [0;cumsum([length(mD) for mD in movingDim])...]
     @info "Write movie data"
     for i in 1:length(files)
-        write_movie_to_shared(dataOut,files[i],sz,nAcquiredChannels,nAcquiredFrames[i],nAcquiredSlices[i],nAcquiredVolumes[i],length(dimSel),dataLengths[i],channels,frames[i],slices[i],volumes[i],rois,offsetMoving[i],roisPos)
+        dataOut = write_movie_to_shared!(dataOut,files[i],sz,nAcquiredChannels,nAcquiredFrames[i],nAcquiredSlices[i],nAcquiredVolumes[i],length(dimSel),dataLengths[i],channels,frames[i],slices[i],volumes[i],rois,offsetMoving[i],roisPos)
     end
   
     #@sync begin
@@ -118,7 +118,7 @@ function read_SI_movie_set(files::Array{String,1};binFile=nothing,rois=nothing,c
     #    end
     #end
     
-    dataOut,fullMeta,fullFirstFrame,(roiLines,sz[2],nChannels,nFrames,nRealSlices,nVolumes)
+    dataOut,fullMeta,fullFirstFrame,(roiLines,sz[1],nChannels,nFrames,nRealSlices,nVolumes)
     
 end
 
@@ -158,18 +158,18 @@ function acquired_channel_frame_slice_volume(SImeta,sz)
 end
 
 ## Read a SI movie and return an array of SharedArrays
-function write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos)
-   write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos,myrange(out[1],[0,length(files)]))
-end
+#function write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos)
+  # write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos,myrange(out[1],[0,length(files)]))
+#end
 
-function write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos,filerange)
-    for i in filerange
-        @info "Write movie $(i), volumes $(volumes[i][end])"
-        write_movie_to_shared(out,files[i],sz,nChannels,nFrames[i],nAcquiredSlices[i],nVolumes[i],fullD,dataLength[i],channels,frames[i],slices[i],volumes[i],rois,offsets[i],roisPos)
-    end
-end
+#function write_movie_toshared_chunk(out,files,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offsets,roisPos,filerange)
+#    for i in filerange
+#        @info "Write movie $(i), volumes $(volumes[i][end])"
+#        write_movie_to_shared(out,files[i],sz,nChannels,nFrames[i],nAcquiredSlices[i],nVolumes[i],fullD,dataLength[i],channels,frames[i],slices[i],volumes[i],rois,offsets[i],roisPos)
+#    end
+#end
 
-function write_movie_to_shared(out,f::String,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offset,roisPos)
+function write_movie_to_shared!(out,f::String,sz,nChannels,nFrames,nAcquiredSlices,nVolumes,fullD,dataLength,channels,frames,slices,volumes,rois,offset,roisPos)
     data = ScanImageTiffReader.open(f) do io
         ScanImageTiffReader.data(io)
     end
@@ -185,15 +185,15 @@ function write_movie_to_shared(out,f::String,sz,nChannels,nFrames,nAcquiredSlice
     out
 end
 
-function myrange(q::SharedArray,bigrange)
-    idx = indexpids(q)
-    if idx == 0 # This worker is not assigned a piece
-        return 1:0, 1:0
-    end
-    nchunks = length(procs(q))
-    splits = [round(Int, s) for s in range(bigrange[1],stop=bigrange[2],length=nchunks+1)]
-    splits[idx]+1:splits[idx+1]
-end
+#function myrange(q::SharedArray,bigrange)
+#    idx = indexpids(q)
+#    if idx == 0 # This worker is not assigned a piece
+#        return 1:0, 1:0
+#    end
+#    nchunks = length(procs(q))
+#    splits = [round(Int, s) for s in range(bigrange[1],stop=bigrange[2],length=nchunks+1)]
+#    splits[idx]+1:splits[idx+1]
+#end
 
 ## Reading the metadata header as a Dictionary, in case it's not a JSON header
 function makeLineDict(metaLine)
