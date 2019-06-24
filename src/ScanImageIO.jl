@@ -127,7 +127,7 @@ end
 nframes(SImeta) = SImeta["SI"]["hStackManager"]["framesPerSlice"]
 nslices(SImeta) = SImeta["SI"]["hStackManager"]["numSlices"]
 savedChannels(SImeta) = SImeta["SI"]["hChannels"]["channelSave"]
-hasfastz(SImeta) = (SImeta["SI"]["hFastZ"]["hasFastZ"] == 1)
+hasfastz(SImeta) = (SImeta["SI"]["hFastZ"]["hasFastZ"] == 1) & (!isnothing(SImeta["SI"]["hFastZ"]["numFramesPerVolume"]))
 nslicesAcquired(SImeta) =  hasfastz(SImeta) ? SImeta["SI"]["hFastZ"]["numFramesPerVolume"] : nslices(SImeta)
 nvolumes(SImeta) = hasfastz(SImeta) ? SImeta["SI"]["hFastZ"]["numVolumes"] : 1
 hasmRoi(SImeta) = (SImeta["SI"]["hRoiManager"]["mroiEnable"] == 1)
